@@ -1,0 +1,430 @@
+﻿'CR3000 Series Datalogger
+'date: 2017-03-14
+'program author: spirrobe -> github.com/spirrobe/
+' search for OPTIONS to find adjustable switches in the below program
+' possible are sampling rates, serial port and checksum validation
+' cabling is according to the COMPORT (see under CDP and OPTIONS) you choose
+
+
+'*****************TIME AND FREQUENCIES**************
+''OPTIONS HOW LONG DO YOU WANT TO SAMPLE, -1 for autoallocation (only needed for card out)
+'Const days = -1
+
+' process cdp data or not
+Const cdp_process = 1
+
+'OPTIONS SAMPLING FREQUENCY
+' sampling rates in hz
+Const samp_freq_fast = 10
+Const samp_freq_status = 1
+
+'*******************CDP OPTIONS************************
+'OPTIONS CDP DATA
+' use the below to filter out non matching cdp checksums
+Const cdp_checksum_must_match = 0
+
+'OPTIONS CDP SERIAL
+'serial settings for cdp
+Const cdp_serial_port = ComC5 ' the comport used, try changing tx/rx if no communication
+Const cdp_serial_type =  3 ' this should be 3
+Const cdp_serial_buffer_size = 8192 ' this should be large enough to contain some thing
+Const cdp_serial_Baudrate = 57600 ' this is set physically on the cdp, could be 38400 as well
+
+
+'******************* TIME RELATED CALCULATIONS*******************
+' time conversion numbers
+Const day2sec = 24 * 60 * 60
+Const sec2msec = 1000
+Const halfhour = 30
+Const halfhour_in_sec = halfhour * 60
+
+' sampling rates in msec (used for scans)
+Const samp_rate_fast = sec2msec / samp_freq_fast
+Const samp_rate_status = sec2msec / samp_freq_status
+
+'' number of samples (used for card out)
+'#If days = -1
+'Const n_samp_fast = -1
+'Const n_samp_status = -1
+'Const n_samp_halfhour = -1
+'#Else
+'Const n_samp_fast = samp_freq_fast * days * day2sec
+'Const n_samp_status = samp_freq_status * days * day2sec
+'Const n_samp_halfhour = days * 48
+'#EndIf
+
+'****************************Status ***********************************
+'Declare Constants and variables
+Public PTemp: Units PTemp = degC
+Public batt_volt: Units batt_volt = V
+StationName = CDP_EC
+
+'filenames of last stored tablefiles
+Public LFN_status As String * 40
+Public LFN_cdp As String * 40
+Public LFN_cdp_30min As String * 40
+Public LFN_cdp_raw As String * 40
+
+'******************CDP SETUP****************
+Dim cdp_comm_ack As Long = &H06060000
+Dim cdp_comm_nak As Long = &H15150000
+
+Public cdp_firmware As Long,cdp_comm_resp_setup_success As Long = 0
+Public resplen,resplen_before_all
+Public response As Long, cdp_comm_cmd_setup_chksum As Long = 0
+Public cdp_comm_resp_debug_answer As Long
+Const cdp_comm_cmd_setup_ncmds = 4
+
+' setup commands for the cdp
+' if we send hexstuff longer than 8 bytes crbasic fucks it up, hard.
+' sending more than 4 bytes at once does not work with looping
+' GREAT! Hence the following array is all long
+Dim cdp_comm_cmd_setup(25) As Long = {
+&H1B011400,&H00001E00,'cmdno,adc tresh, n_bin
+&H01000000,&H40000000,'dof, unused
+&H00000000,&H5b006f00,' unused, bin 1 = 5b = 91, bin2 = 111
+&H9f00be00,&Hd700f300, 'bin 3-6 = 159,190,215
+&Hfe001001,&H2d016301, 'bin 7-10
+&H7e01e801,&H7c02ef02, 'bin 11 - 14
+&H4e03bf03,&h2e041105, 'bin 15-18
+&Hac058106,&H3b07e007, 'bin 19-22
+&hb608d109,&Hd30abb0b, 'bin 23-26
+&h940c600d,&H4c0eff0f, 'bin 27-30
+&H00000000,&H00000000, 'bin 31-34
+&H00000000,&H00000000, 'bin 35-38
+&H00000000} 'bin 39-40
+
+'******************CDP DATA****************
+'basic command to send data
+Dim cdp_comm_cmd_data As Long = &H1B021d00
+
+' lenght of the response in bytes
+Const cdp_comm_cmd_data_length As Long = 156
+
+' since it is long, we divide the number os bytes by four
+Dim dummy(cdp_comm_cmd_data_length/4) As Long
+
+'cdp contained in response
+Dim cdp_data_housekeeping_raw(8) As Long = 0'this is integer
+Public cdp_data_housekeeping_cal(8) As Float
+Alias cdp_data_housekeeping_cal(1) = Current_Laser_mA
+Alias cdp_data_housekeeping_cal(2) = Monitor_Dump_Spot
+Alias cdp_data_housekeeping_cal(3) = Wingboard_T
+Alias cdp_data_housekeeping_cal(4) = Laser_T
+Alias cdp_data_housekeeping_cal(5) = Sizer_Baseline
+Alias cdp_data_housekeeping_cal(6) = Qualifier_Baseline
+Alias cdp_data_housekeeping_cal(7) = Monitor_5V
+Alias cdp_data_housekeeping_cal(8) = Control_Board_T
+
+Public cdp_data_reject_dof As Long
+Alias cdp_data_reject_dof = DOF_Reject
+
+Public cdp_data_other(5) As Long = 0'this is integer
+Public cdp_data_quality(5) As Float ' this is converted quality from cdp_data_other
+Alias cdp_data_quality(1) = qual_bandwdith
+Alias cdp_data_quality(2) = qual_treshold
+Alias cdp_data_quality(3) = avg_transit
+Alias cdp_data_quality(4) = dt_bandwidth
+Alias cdp_data_quality(5) = dynamic_treshold
+
+Public cdp_data_adc_overflow As Long
+Alias cdp_data_adc_overflow = ADC_Overflow
+
+Public cdp_data_calc_chksum As Long = 0 'this is integer
+
+'make this long
+Public cdp_data_cdp_chksum As Long = 0
+Public cdp_data_bincount(30) As Long = 0
+
+' cdp offset for skipped  and flushed scans
+Public cdp_skipped_scans As Long = 0
+Public cdp_flushed_scans As Long = 0
+Public cdp_wrong_scans As Long = 0
+
+' cdp helper variables for loops and checksum
+Dim i As Long,j As Long, thisnum As Long = 0
+
+'*********************TABLES***************************************
+'Define Data Tables.
+DataTable (status_data,1,-1)
+  DataInterval (0,samp_rate_status,mSec,10)
+  'CardOut (0, n_samp_status)
+  TableFile ("CRD:status_data",64,-2,0,1,Day,0,LFN_status)
+  Minimum (1,batt_volt,IEEE4,False,False)
+  FieldNames ("BatteryVoltage")
+  Sample (1,PTemp,FP2)
+  FieldNames ("PanelTemp")
+EndTable
+
+' CDP samples
+#If cdp_process = 1
+DataTable (cdp_data,1,-1)
+  DataInterval (0,samp_rate_fast,mSec,10)
+  'CardOut (0,n_samp_fast)
+  TableFile ("CRD:cdp_data",64,-2,0,1,Day,0,LFN_cdp)
+  Sample (8,cdp_data_housekeeping_cal,IEEE4)  'this is float converted housekeeping
+  Sample (1, cdp_data_reject_dof,UINT4,False)  'this is long
+  Sample (5,cdp_data_quality,IEEE4) 'this is float values for quality of cdp meas
+  Sample (1,cdp_data_adc_overflow,UINT4) ' this is integer number
+  Sample (30,cdp_data_bincount ,UINT4) ' these are the bins with counts
+  Sample (1,cdp_data_cdp_chksum,UINT2  )'this is integer checksum from cdp
+  Sample (1,cdp_data_calc_chksum,UINT2  )'this is integer calculated on logger
+  Sample (1,cdp_flushed_scans,UINT4  )'this is integer calculated on logger
+  Sample (1,cdp_skipped_scans,UINT4  ) 'this is long calculated on logger
+  Sample (1,cdp_wrong_scans,UINT4  ) 'this is long calculated on logger
+
+EndTable
+
+' CDP halfhourly
+DataTable (cdp_data_halfhour,1,-1)
+  DataInterval (0,halfhour,min,10)
+  'CardOut (0, n_samp_halfhour)
+  TableFile ("CRD:cdp_data_30min",64,-2,0,1,Day,0,LFN_cdp_30min)
+  Average (8,cdp_data_housekeeping_cal,IEEE4,False)  'this is float converted
+
+  Average (5,cdp_data_quality,IEEE4,False) 'this is float values for quality of cdp meas
+  Maximum (5,cdp_data_quality,IEEE4,False,False) 'this is float values for quality of cdp meas
+  Minimum (5,cdp_data_quality,IEEE4,False,False) 'this is float values for quality of cdp meas
+
+  Totalize (1,cdp_data_adc_overflow,UINT4,False)
+  Maximum (1,cdp_data_adc_overflow,UINT4,False,False)
+  Minimum(1,cdp_data_adc_overflow,UINT4,False,False)
+
+  Totalize (1, cdp_data_reject_dof,UINT4,False)  'this is long
+  Totalize (30,cdp_data_bincount ,UINT4,False) ' these are the bins
+
+  ' These are here to easily see whether you need to check the rawdata for the exact
+  ' moment when the scans were skipped or flushed
+  Minimum (1,cdp_flushed_scans,UINT2,False,False  )'this is integer calculated on logger
+  Maximum (1,cdp_flushed_scans,UINT2,False,False  )'this is integer calculated on logger
+  Minimum (1,cdp_skipped_scans,UINT4,False,False  ) 'this is long calculated on logger
+  Maximum (1,cdp_skipped_scans,UINT4 ,False,False ) 'this is long calculated on logger
+  Minimum (1,cdp_wrong_scans,UINT4 ,False,False ) 'this is long calculated on logger
+  Maximum (1,cdp_wrong_scans,UINT4 ,False,False ) 'this is long calculated on logger
+EndTable
+
+#Else
+DataTable (cdp_data_raw,1,-1)
+  DataInterval (0,samp_rate_fast,mSec,10)
+  'CardOut (0,n_samp_fast)
+  TableFile ("CRD:cdp_data_raw",64,-2,0,1,Day,0,LFN_cdp_raw)
+  Sample (39,dummy,UINT4)'this is integer calculated on logger
+  Sample (1,cdp_data_cdp_chksum,UINT2  )'this is integer checksum from cdp
+  Sample (1,cdp_data_calc_chksum,UINT2  )'this is integer checksum from cdp
+EndTable
+#EndIf
+
+
+' Define Subroutines
+' generate checksum of 8 byte in place of the sumvariable
+Sub cdp_checksum_calculator(thisnum As Long, thissum As Long)
+  thissum += (thisnum AND &hff)
+  thissum += (thisnum >> 8 AND &hff)
+  thissum += (thisnum >> 16 AND &hff)
+  thissum += (thisnum >> 24 AND &hff)
+EndSub
+#If cdp_process = 1
+
+' convert the first cdp channels to meaningful values
+Sub cdp_convert_housekeeping (input(8) As Long,output(8) As Float)
+
+  'laser current converted [mA]
+  output(1) = 0.061 * input(1)
+
+  'dump spot monitor [V]
+  output(2) = input(2) * (5 / 4095)
+
+  'maybe the conversion should include -273.15 not just 273?
+  ' wingboard temp [°C]
+  output(3) = input(3) * 5/4095
+  output(3) = ((LN(5/output(3) - 1)/3750 + 1 / 298) ^ (-1)) - 273
+
+  ' laser temp [°C]
+  output(4) = input(4) * 5/4095
+  output(4) = ((LN(5/output(4) - 1)/3750 + 1 / 298) ^ (-1)) - 273
+
+  ' quality tresholds [V]
+  output(5) = input(5) * (5 / 4095)
+  output(6) = input(6) * (5 / 4095)
+
+  ' voltage monitor [V], Is multiplied by two since it was divided
+  ' by two To fit within the range
+  output(7) = input(7) * ((2*5) / 4095)
+
+  ' control board temperate [°C]
+  output(8) = input(8) * 0.06401 - 50
+  output(8) = input(8) ^ 2 * (-8.60917*10^-7) + input(8)*(-0.047819)+153.973
+EndSub
+
+#EndIf
+
+BeginProg
+  PipeLineMode
+
+  ' calculate the checksum everytime, could be done once as well
+  ' but the impact should be low
+  cdp_comm_cmd_setup_chksum = 0
+
+  ' loop over the commands in the long array
+  For i = 1 To ArrayLength(cdp_comm_cmd_setup) Step 1
+
+    ' use a placeholder var to calculate checksum since the available checksums do not work properly
+    thisnum = cdp_comm_cmd_setup(i)
+    cdp_checksum_calculator(thisnum ,cdp_comm_cmd_setup_chksum)
+
+  Next i
+
+  ' the checksum is initalised as long, but the cdp expect only 2 bytes
+  ' thus we convert to the proper numbers that will be sent (shifting should work as well
+  cdp_comm_cmd_setup_chksum = (cdp_comm_cmd_setup_chksum MOD 256) * 256^3 + Floor(cdp_comm_cmd_setup_chksum / 256)*256^2
+
+
+  ' open the proper com port for the CDP
+  SerialOpen (cdp_serial_port,cdp_serial_Baudrate,cdp_serial_type,0,cdp_serial_buffer_size)
+
+  ' open the proper com port for the young
+  SerialOpen (young_serial_port,young_serial_Baudrate,young_serial_type,0,young_serial_buffer_size)
+
+
+  While cdp_comm_resp_setup_success = 0
+
+    ' send stuff out to the cdp at com2
+    SerialOutBlock(cdp_serial_port,cdp_comm_cmd_setup,ArrayLength(cdp_comm_cmd_setup)*4)
+    SerialOutBlock(cdp_serial_port,cdp_comm_cmd_setup_chksum,2)
+    ' did we get something?
+    resplen=SerialInChk(cdp_serial_port)
+    If resplen > 4
+      SerialFlush(cdp_serial_port)
+    EndIf
+    ' if yes start the check whether it was successful
+    If resplen >= 1
+      ' read in the stuff from the com channel
+      SerialInBlock(cdp_serial_port,response,resplen)
+      ' is the response what we expected? i.e. acknowledged
+      If (&HFFFF0000 AND response) = cdp_comm_ack
+        'setup succeeded, we can start with scanning
+        cdp_comm_resp_setup_success = 1
+        ' converts to a readable number for the firmware
+        ' the cdp doesnt actually send the firmware for non successful setup
+        ' thats why its only calculated here
+        cdp_firmware = (&H0000FFFF AND response)
+        'the below delay is important for communication to work somewhat properly, should be at least 250 msec
+        delay (1,1,Sec)
+        SerialFlush(cdp_serial_port)
+        SerialOutBlock(cdp_serial_port,cdp_comm_cmd_data,4)
+      ElseIf (&HFFFF0000 AND response) = cdp_comm_nak Then
+        ' the setup cmd was received but did not work properly
+        cdp_comm_resp_setup_success = 0
+      Else
+        ' this shouldnt even happen in the first place, but if it does cdp_answer may help
+        cdp_comm_resp_setup_success = 0
+        cdp_comm_resp_debug_answer = response
+      EndIf
+    EndIf
+  Wend
+
+  '***********SONIC SAMPLING*******************
+  Scan (samp_rate_fast,mSec,0,0)
+
+  '***********CDP SAMPLING*******************
+  '***********one sends out data and just saves them*******************
+
+    resplen_before_all = SerialInChk(cdp_serial_port)
+    If resplen_before_all < cdp_comm_cmd_data_length
+      cdp_skipped_scans = cdp_skipped_scans + 1
+      cdp_wrong_scans =  cdp_wrong_scans + 1
+    ElseIf resplen_before_all > (2*cdp_comm_cmd_data_length) AND resplen_before_all MOD cdp_comm_cmd_data_length > 0
+      'SerialFlush(cdp_serial_port)
+      cdp_flushed_scans = cdp_flushed_scans + 1
+      cdp_wrong_scans = cdp_wrong_scans + 1
+    Else
+      cdp_wrong_scans = 0
+      SerialInBlock(cdp_serial_port,dummy,cdp_comm_cmd_data_length-2)
+      SerialInBlock(cdp_serial_port,cdp_data_cdp_chksum,2)
+
+      ' send out data sampling command which is 4 bytes
+      SerialOutBlock(cdp_serial_port,cdp_comm_cmd_data,4)
+
+      'setup the checksum
+      MoveBytes ( cdp_data_cdp_chksum ,3,cdp_data_cdp_chksum,0 ,1)
+      MoveBytes ( cdp_data_cdp_chksum ,2,cdp_data_cdp_chksum,1,1)
+      MoveBytes ( cdp_data_cdp_chksum ,0,&h00,0 ,1)
+      MoveBytes ( cdp_data_cdp_chksum ,1,&h00,0 ,1)
+
+      i=0
+
+      ' the size of the checksum function needs to be set, but i dont know to what,
+      ' im assuming the length of the input
+      cdp_data_calc_chksum=CheckSum(dummy,23,154)
+
+      #If cdp_process = 1
+      For j=0 To ArrayLength(cdp_data_housekeeping_raw)-1 Step 1
+        MoveBytes ( cdp_data_housekeeping_raw(j+1) ,3,dummy(Floor(i/2)+1),(0+j*2) MOD 4 ,1)
+        MoveBytes ( cdp_data_housekeeping_raw(j+1) ,2,dummy(Floor(i/2)+1),(1+j*2) MOD 4 ,1)
+        i=i+1
+      Next j
+
+      MoveBytes ( cdp_data_reject_dof ,1,dummy(5),0 ,1)
+      MoveBytes ( cdp_data_reject_dof ,0,dummy(5),1 ,1)
+      MoveBytes ( cdp_data_reject_dof ,3,dummy(5),2 ,1)
+      MoveBytes ( cdp_data_reject_dof ,2,dummy(5),3 ,1)
+
+      ' third the quality data
+      i = i+2
+      j=0
+      For j = 0 To ArrayLength(cdp_data_other)-1 Step 1
+        MoveBytes ( cdp_data_other(j+1) ,3,dummy(Floor(i/2)+1),(0+j*2) MOD 4 ,1)
+        MoveBytes ( cdp_data_other(j+1) ,2,dummy(Floor(i/2)+1),(1+j*2) MOD 4 ,1)
+        cdp_data_quality(j+1) = cdp_data_other(j+1)
+        i = i+1
+      Next j
+
+      'now we need stuff from two dummy for the adc overflow
+      MoveBytes ( cdp_data_adc_overflow ,1,dummy(8),2 ,1)
+      MoveBytes ( cdp_data_adc_overflow ,0,dummy(8),3 ,1)
+      MoveBytes ( cdp_data_adc_overflow ,3,dummy(9),0 ,1)
+      MoveBytes ( cdp_data_adc_overflow ,2,dummy(9),1 ,1)
+
+      ' now follow the bins, which are always in two varying
+      cdp_convert_housekeeping(cdp_data_housekeeping_raw,    cdp_data_housekeeping_cal)
+
+      'i needs to be 9, as we need the bytes 34 and up,
+      ' which divided by four equals 8.5, which is 9.5 in loggerarrays, i.e. the
+      ' second part of dummy(9), which is in loggerreadings the first two bytes (not last)
+      i=9
+      For j = 1 To ArrayLength(cdp_data_bincount) Step 1
+        MoveBytes (cdp_data_bincount(j),1,dummy(i),3 ,1)
+        MoveBytes ( cdp_data_bincount(j) ,0,dummy(i),2,1)
+        MoveBytes (cdp_data_bincount(j),3,dummy(i+1), 0,1)
+        MoveBytes ( cdp_data_bincount(j) ,2,dummy(i+1), 1,1)
+        i = i+1
+      Next j
+
+      CallTable cdp_data
+      CallTable cdp_data_halfhour
+      #Else
+      CallTable cdp_data_raw
+      #EndIf
+
+    EndIf
+
+    If cdp_wrong_scans > 5
+      SerialFlush(cdp_serial_port)
+      SerialOutBlock(cdp_serial_port,cdp_comm_cmd_data,4)
+      cdp_wrong_scans = 0
+    EndIf
+  NextScan
+
+
+  '***********STATUS SAMPLING*******************
+  SlowSequence
+  'status scan, only do this if cdp is setup
+  Scan(samp_rate_status,mSec,0,0)
+    PanelTemp (PTemp,250)
+    Battery (batt_volt)
+    CallTable status_data
+  NextScan
+
+
+EndProg
+
