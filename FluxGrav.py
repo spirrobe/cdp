@@ -55,12 +55,4 @@ def FluxGrav(lwc,
     gravflux = lwc * sedspeed
 
     # choose either the sum of bins for a record or the single bins
-    if combined:
-        # summarize the gravfluxed of each bin toghether
-        # summarize because this will be the complete water flux down to
-        # the surface
-        return np.nansum(gravflux, axis=1)
-    else:
-        # do not summarize, each bin is already the
-        # graviational flux of that bin
-        return gravflux
+    return np.nansum(gravflux, axis=1) if combined else gravflux
