@@ -41,10 +41,11 @@ def ConcPerCCM(bins,
     # windspeed defaults to 1 meter per seconds windspeed
     # samplearea defaults to 0.298 as given by CDP specs
     # make cm/s out of it
-    if not type(windspeed) == np.ndarray:
-        windspeed = np.asarray(windspeed, dtype=np.float)
-    else:
-        windspeed = windspeed.copy()
+    windspeed = (
+        windspeed.copy()
+        if type(windspeed) == np.ndarray
+        else np.asarray(windspeed, dtype=np.float)
+    )
 
     # convert windspeed first to cm per s and then to cm adjusted to
     # sampling frequency, as we look for cm and we still have cm/s
@@ -168,12 +169,7 @@ def LWC(inputdata, # needs to be in # / m^3
     _lwc = (_lwc * dropsize)
 
     # choose either the sum of bins for a record or the single bins
-    if combined:
-        # summarize the concenctrations of the bins toghether
-        return np.nansum(_lwc, axis=1)
-    else:
-        # do not summarize, each bin is already the lwc
-        return _lwc
+    return np.nansum(_lwc, axis=1) if combined else _lwc
 
 
 
@@ -361,15 +357,7 @@ def FluxGrav(lwc,
     gravflux = lwc * sedspeed
 
     # choose either the sum of bins for a record or the single bins
-    if combined:
-        # summarize the gravfluxed of each bin toghether
-        # summarize because this will be the complete water flux down to
-        # the surface
-        return np.nansum(gravflux, axis=1)
-    else:
-        # do not summarize, each bin is already the
-        # graviational flux of that bin
-        return gravflux
+    return np.nansum(gravflux, axis=1) if combined else gravflux
 
 
 def Gonser2011(bincounts=np.ones(30),
@@ -380,30 +368,32 @@ def Gonser2011(bincounts=np.ones(30),
     # take note that this will also mean, that the passed in bins to
     # all derived quantities like LWC/Conc need to be adjusted for
     # the proper calculations thereof
-    sca = {2.66: [[0, 0.66]],
-           4.66: [[0, 0.34], [1, 1.0], [2, 0.66]],
-           7.41: [[2, 0.34], [3, 1.0], [4, 1], [5, 0.41]],
-           9.66: [[5, 0.59], [6, 1.0], [7, 0.66]],
-           11.36: [[7, 0.34], [8, 1.0], [9, 0.36]],
-           13.21: [[9, 0.64], [10, 1.0], [11, 0.21]],
-           15.26: [[11, 0.79], [12, 1.26/2]],
-           18.01: [[12, 0.74/2], [13, 2.0/2.0], [14, 0.01/2]],
-           19.96: [[14, 1.95/2]],
-           21.96: [[14, 0.04/2], [15, 1.96/2]],
-           23.61: [[15, 0.04/2], [16, 1.61/2]],
-           25.01: [[16, 0.39/2], [17, 1.01/2]],
-           26.51: [[17, 0.99/2], [18, 0.51/2]],
-           28.46: [[18, 1.49/2], [19, 0.46/2]],
-           30.51: [[19, 1.54/2], [20, 0.51/2]],
-           33.36: [[20, 1.49/2], [21, 1.36/2]],
-           35.26: [[21, 0.64/2], [22, 1.26/2]],
-           37.06: [[22, 0.74/2], [23, 1.06/2]],
-           39.01: [[23, 0.94/2], [24, 1.01/2]],
-           41.11: [[24, 0.99/2], [25, 1.11/2]],
-           43.76: [[25, 0.89/2], [26, 1.76/2]],
-           46.41: [[26, 0.24/2], [27, 2.0/2.0], [28, 0.41/2]],
-           50: [[28, 1.59/2], [29, 2.0/2.0]],
-           }
+    sca = {
+        2.66: [[0, 0.66]],
+        4.66: [[0, 0.34], [1, 1.0], [2, 0.66]],
+        7.41: [[2, 0.34], [3, 1.0], [4, 1], [5, 0.41]],
+        9.66: [[5, 0.59], [6, 1.0], [7, 0.66]],
+        11.36: [[7, 0.34], [8, 1.0], [9, 0.36]],
+        13.21: [[9, 0.64], [10, 1.0], [11, 0.21]],
+        15.26: [[11, 0.79], [12, 1.26 / 2]],
+        18.01: [[12, 0.74 / 2], [13, 1.0], [14, 0.01 / 2]],
+        19.96: [[14, 1.95 / 2]],
+        21.96: [[14, 0.04 / 2], [15, 1.96 / 2]],
+        23.61: [[15, 0.04 / 2], [16, 1.61 / 2]],
+        25.01: [[16, 0.39 / 2], [17, 1.01 / 2]],
+        26.51: [[17, 0.99 / 2], [18, 0.51 / 2]],
+        28.46: [[18, 1.49 / 2], [19, 0.46 / 2]],
+        30.51: [[19, 1.54 / 2], [20, 0.51 / 2]],
+        33.36: [[20, 1.49 / 2], [21, 1.36 / 2]],
+        35.26: [[21, 0.64 / 2], [22, 1.26 / 2]],
+        37.06: [[22, 0.74 / 2], [23, 1.06 / 2]],
+        39.01: [[23, 0.94 / 2], [24, 1.01 / 2]],
+        41.11: [[24, 0.99 / 2], [25, 1.11 / 2]],
+        43.76: [[25, 0.89 / 2], [26, 1.76 / 2]],
+        46.41: [[26, 0.24 / 2], [27, 1.0], [28, 0.41 / 2]],
+        50: [[28, 1.59 / 2], [29, 1.0]],
+    }
+
 
     if getbins:
         return [2.0] + list(sca.keys())
@@ -421,12 +411,11 @@ def Gonser2011(bincounts=np.ones(30),
         for scalepair in sca[newbinsize]:
             output[:, newbinno] += bincounts[:, scalepair[0]] * scalepair[1]
 
-    if returnnewsizes:
-        newsizes = [2.00]
-        newsizes.extend(sorted(list(sca.keys())))
-        return output,  newsizes
-    else:
+    if not returnnewsizes:
         return output
+    newsizes = [2.00]
+    newsizes.extend(sorted(list(sca.keys())))
+    return output,  newsizes
 
 
 def Spiegel2012(bincounts,
@@ -439,30 +428,32 @@ def Spiegel2012(bincounts,
     # take note that this will also mean, that the passed in bins to
     # all derived quantities like LWC/Conc need to be adjusted for
     # the proper calculations thereof
-    sca = {2.66: [[0, 0.66]],
-           4.66: [[0, 0.34], [1, 1.0], [2, 0.66]],
-           7.41: [[2, 0.34], [3, 1.0], [4, 1], [5, 0.41]],
-           9.66: [[5, 0.59], [6, 1.0], [7, 0.66]],
-           11.36: [[7, 0.34], [8, 1.0], [9, 0.36]],
-           13.21: [[9, 0.64], [10, 1.0], [11, 0.21]],
-           15.26: [[11, 0.79], [12, 1.26/2]],
-           18.01: [[12, 0.74/2], [13, 2.0/2.0], [14, 0.01/2]],
-           19.96: [[14, 1.95/2]],
-           21.96: [[14, 0.04/2], [15, 1.96/2]],
-           23.61: [[15, 0.04/2], [16, 1.61/2]],
-           25.01: [[16, 0.39/2], [17, 1.01/2]],
-           26.51: [[17, 0.99/2], [18, 0.51/2]],
-           28.46: [[18, 1.49/2], [19, 0.46/2]],
-           30.51: [[19, 1.54/2], [20, 0.51/2]],
-           33.36: [[20, 1.49/2], [21, 1.36/2]],
-           35.26: [[21, 0.64/2], [22, 1.26/2]],
-           37.06: [[22, 0.74/2], [23, 1.06/2]],
-           39.01: [[23, 0.94/2], [24, 1.01/2]],
-           41.11: [[24, 0.99/2], [25, 1.11/2]],
-           43.76: [[25, 0.89/2], [26, 1.76/2]],
-           46.41: [[26, 0.24/2], [27, 2.0/2.0], [28, 0.41/2]],
-           50: [[28, 1.59/2], [29, 2.0/2.0]],
-           }
+    sca = {
+        2.66: [[0, 0.66]],
+        4.66: [[0, 0.34], [1, 1.0], [2, 0.66]],
+        7.41: [[2, 0.34], [3, 1.0], [4, 1], [5, 0.41]],
+        9.66: [[5, 0.59], [6, 1.0], [7, 0.66]],
+        11.36: [[7, 0.34], [8, 1.0], [9, 0.36]],
+        13.21: [[9, 0.64], [10, 1.0], [11, 0.21]],
+        15.26: [[11, 0.79], [12, 1.26 / 2]],
+        18.01: [[12, 0.74 / 2], [13, 1.0], [14, 0.01 / 2]],
+        19.96: [[14, 1.95 / 2]],
+        21.96: [[14, 0.04 / 2], [15, 1.96 / 2]],
+        23.61: [[15, 0.04 / 2], [16, 1.61 / 2]],
+        25.01: [[16, 0.39 / 2], [17, 1.01 / 2]],
+        26.51: [[17, 0.99 / 2], [18, 0.51 / 2]],
+        28.46: [[18, 1.49 / 2], [19, 0.46 / 2]],
+        30.51: [[19, 1.54 / 2], [20, 0.51 / 2]],
+        33.36: [[20, 1.49 / 2], [21, 1.36 / 2]],
+        35.26: [[21, 0.64 / 2], [22, 1.26 / 2]],
+        37.06: [[22, 0.74 / 2], [23, 1.06 / 2]],
+        39.01: [[23, 0.94 / 2], [24, 1.01 / 2]],
+        41.11: [[24, 0.99 / 2], [25, 1.11 / 2]],
+        43.76: [[25, 0.89 / 2], [26, 1.76 / 2]],
+        46.41: [[26, 0.24 / 2], [27, 1.0], [28, 0.41 / 2]],
+        50: [[28, 1.59 / 2], [29, 1.0]],
+    }
+
 
     binsizes = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20,
                 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50]
@@ -472,10 +463,7 @@ def Spiegel2012(bincounts,
         for scalepair in sca[newbinsize]:
             output[:, newbinno] += bincounts[:, scalepair[0]] * scalepair[1]
 
-    if returnnewsizes:
-        return output,  [2.0] + list(sca.keys())
-    else:
-        return output
+    return (output, [2.0] + list(sca.keys())) if returnnewsizes else output
 
 
 

@@ -60,10 +60,5 @@ def LWC(inputdata, # needs to be in # / m^3
     _lwc = (_lwc * dropsize)
 
     # choose either the sum of bins for a record or the single bins
-    if combined:
-        # summarize the concenctrations of the bins toghether
-        return np.nansum(_lwc, axis=1)
-    else:
-        # do not summarize, each bin is already the lwc
-        return _lwc
+    return np.nansum(_lwc, axis=1) if combined else _lwc
 

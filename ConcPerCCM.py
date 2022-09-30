@@ -15,10 +15,11 @@ def ConcPerCCM(bins,
     # windspeed defaults to 1 meter per seconds windspeed
     # samplearea defaults to 0.298 as given by CDP specs
     # make cm/s out of it
-    if not type(windspeed) == np.ndarray:
-        windspeed = np.asarray(windspeed, dtype=np.float)
-    else:
-        windspeed = windspeed.copy()
+    windspeed = (
+        windspeed.copy()
+        if type(windspeed) == np.ndarray
+        else np.asarray(windspeed, dtype=np.float)
+    )
 
     # convert windspeed first to cm per s and then to cm adjusted to
     # sampling frequency, as we look for cm and we still have cm/s
