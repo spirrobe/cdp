@@ -13,7 +13,7 @@ This repository also includes functions for rebinning based on the two publicati
 ## Requirements and extra
 - numpy
 
-The functions were used in conjunction with pandas time series of the bins (1 bin -> 1 column) as the numpy functions do broadcasting.
+The functions were used in conjunction with pandas time series of the bins (1 bin -> 1 column) as the numpy functions do broadcasting/expect rather 2D than 1D input as timeseries x binsizes
 
 ## Function names
 MVD is the mean volume diameter
